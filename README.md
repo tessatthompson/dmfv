@@ -49,3 +49,35 @@ Test:
 curl 'http://localhost:8765/api/foo?version=1.0.0'
 curl 'http://localhost:8765/api/foo?version=2.0.0'
 ```
+
+## Future Plans
+
+**LRU Cache for Worktrees**
+
+Keep N most recently used version checkouts around instead of eager cleanup. Evict oldest when full.
+
+```python
+from dmfv import versioned, configure
+
+configure(cache_size=5)  # Keep up to 5 worktrees cached
+
+async with versioned("./repos/bar", version="1.0.0") as bar:
+    result = await bar.handler({})
+# Worktree stays cached for reuse
+```
+
+**Registry**
+
+Configure repos once at startup instead of passing paths everywhere.
+
+```python
+from dmfv import register, versioned
+
+# At startup
+register("bar", repo_path="./repos/bar")
+register("baz", repo_path="./repos/baz")
+
+# Later - just use the name
+async with versioned("bar", version="1.0.0") as bar:
+    result = await bar.handler({})
+```
