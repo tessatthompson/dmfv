@@ -5,7 +5,7 @@ Run versioned Python functions in isolated subprocesses using git worktrees.
 ## Installation
 
 ```bash
-pip install git+https://github.com/YOUR_USERNAME/dmfv.git@v0.1.0
+pip install git+https://github.com/mantacares/dmfv.git@v0.1.0
 ```
 
 ## Usage
