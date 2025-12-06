@@ -3,40 +3,103 @@ import asyncio
 import pickle
 import sys
 from pathlib import Path
+from typing import Any
+
+from pydantic import ValidationError, create_model
 
 from dmfv.version_manager import VersionManager
 
 
-class ModuleProxy:
-    """Proxy object that forwards attribute access as subprocess calls."""
+RESERVED_FIELDS = {"version", "fallback"}
 
-    def __init__(self, process: asyncio.subprocess.Process):
+
+def _build_model_from_schema(schema: dict | None, name: str):
+    """Build a dynamic Pydantic model from JSON schema."""
+    if not schema:
+        return None
+
+    properties = schema.get("properties", {})
+    required = set(schema.get("required", []))
+
+    type_map = {"string": str, "integer": int, "number": float, "boolean": bool, "array": list, "object": dict}
+
+    fields = {}
+    for field_name, field_schema in properties.items():
+        field_type = type_map.get(field_schema.get("type"), Any)
+        fields[field_name] = (field_type, ...) if field_name in required else (field_type, None)
+
+    return create_model(name, **fields) if fields else None
+
+
+async def _rpc_call(process, request: dict) -> dict:
+    """Send RPC request and get response."""
+    data = pickle.dumps(request)
+    process.stdin.write(len(data).to_bytes(4, "big") + data)
+    await process.stdin.drain()
+
+    length = int.from_bytes(await process.stdout.readexactly(4), "big")
+    return pickle.loads(await process.stdout.readexactly(length))
+
+
+class FunctionProxy:
+    """Proxy for a typed function with optional pre-validation."""
+
+    def __init__(self, process: asyncio.subprocess.Process, name: str, input_schema: dict | None):
         self._process = process
+        self._name = name
+        self.input_schema = input_schema
+        self._input_model = _build_model_from_schema(input_schema, f"{name}Input")
+
+    def validate(self, data: dict) -> dict:
+        """Pre-validate input data (optional). Strips reserved fields."""
+        if not self._input_model:
+            return data
+        filtered = {k: v for k, v in data.items() if k not in RESERVED_FIELDS}
+        return self._input_model.model_validate(filtered).model_dump()
+
+    async def __call__(self, *args, **kwargs) -> Any:
+        """Call the function via RPC."""
+        response = await _rpc_call(self._process, {
+            "action": "call",
+            "func": self._name,
+            "args": args,
+            "kwargs": kwargs,
+        })
+
+        if response.get("error"):
+            if response.get("validation_errors"):
+                raise ValidationError.from_exception_data("Validation failed", response["validation_errors"])
+            raise RuntimeError(response["error"])
+
+        return response.get("result")
+
+
+class ModuleProxy:
+    """Proxy for a versioned module."""
+
+    def __init__(self, process: asyncio.subprocess.Process, schemas: dict):
+        self._process = process
+        self._schemas = schemas
+        self._functions = {
+            name: FunctionProxy(process, name, info.get("input"))
+            for name, info in schemas.items()
+        }
+
+    @property
+    def schemas(self) -> dict:
+        return self._schemas
 
     def __getattr__(self, name: str):
         if name.startswith("_"):
             raise AttributeError(name)
-
-        async def call(*args, **kwargs):
-            request = pickle.dumps({"action": "call", "func": name, "args": args, "kwargs": kwargs})
-            self._process.stdin.write(len(request).to_bytes(4, "big") + request)
-            await self._process.stdin.drain()
-
-            length = int.from_bytes(await self._process.stdout.readexactly(4), "big")
-            response = pickle.loads(await self._process.stdout.readexactly(length))
-
-            if response.get("error"):
-                raise RuntimeError(response["error"])
-            return response.get("result")
-
-        return call
+        if name not in self._functions:
+            raise AttributeError(f"Function '{name}' not found")
+        return self._functions[name]
 
     async def _close(self):
         """Shut down the subprocess."""
         try:
-            request = pickle.dumps({"action": "shutdown"})
-            self._process.stdin.write(len(request).to_bytes(4, "big") + request)
-            await self._process.stdin.drain()
+            await _rpc_call(self._process, {"action": "shutdown"})
         except Exception:
             pass
 
@@ -71,12 +134,17 @@ class versioned:
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
 
-        ready = await process.stdout.readexactly(5)
+        try:
+            ready = await process.stdout.readexactly(5)
+        except asyncio.IncompleteReadError as e:
+            stderr = await process.stderr.read()
+            raise RuntimeError(f"Subprocess failed (incomplete read): {stderr.decode()}") from e
         if ready != b"READY":
             stderr = await process.stderr.read()
             raise RuntimeError(f"Subprocess failed to start: {stderr.decode()}")
 
-        self._proxy = ModuleProxy(process)
+        response = await _rpc_call(process, {"action": "get_schemas"})
+        self._proxy = ModuleProxy(process, response.get("schemas", {}))
         return self._proxy
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):

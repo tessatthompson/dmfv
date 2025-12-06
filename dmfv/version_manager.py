@@ -40,10 +40,12 @@ class VersionManager:
 
         # Create worktree
         worktree_path = self.worktrees_dir / f"{func_name}_{version}_{uuid.uuid4().hex[:8]}"
-        subprocess.run(
+        result = subprocess.run(
             ["git", "worktree", "add", str(worktree_path), version],
-            cwd=repo_path, capture_output=True, check=True,
+            cwd=repo_path, capture_output=True,
         )
+        if result.returncode != 0:
+            raise RuntimeError(f"git worktree add failed: {result.stderr.decode()}")
         return worktree_path
 
     def cleanup(self, worktree_path: Path) -> None:

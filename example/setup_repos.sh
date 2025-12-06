@@ -37,10 +37,21 @@ git config tag.gpgsign false
 echo "Creating version 1.0.0 (returns 'bar')"
 cat > function.py << 'EOF'
 """Bar function - Version 1.0.0"""
+from pydantic import BaseModel
 
-def handler(body: dict) -> dict:
-    """Returns 'bar'"""
-    return {"result": "bar", "version": "1.0.0"}
+
+class Input(BaseModel):
+    name: str
+
+
+class Output(BaseModel):
+    result: str
+    version: str
+
+
+def handler(data: Input) -> Output:
+    """Returns 'bar' with the input name."""
+    return Output(result=f"bar: {data.name}", version="1.0.0")
 EOF
 
 git add function.py
@@ -51,15 +62,51 @@ git tag 1.0.0
 echo "Creating version 2.0.0 (returns 'bat')"
 cat > function.py << 'EOF'
 """Bar function - Version 2.0.0"""
+from pydantic import BaseModel
 
-def handler(body: dict) -> dict:
-    """Returns 'bat'"""
-    return {"result": "bat", "version": "2.0.0"}
+
+class Input(BaseModel):
+    name: str
+    count: int = 1
+
+
+class Output(BaseModel):
+    result: str
+    version: str
+
+
+def handler(data: Input) -> Output:
+    """Returns 'bat' with the input name repeated."""
+    return Output(result=f"bat: {data.name * data.count}", version="2.0.0")
 EOF
 
 git add function.py
 git commit -m "v2.0.0: returns bat"
 git tag 2.0.0
+
+# Version 3.0.0 - no params, returns timestamp
+echo "Creating version 3.0.0 (no params, returns timestamp)"
+cat > function.py << 'EOF'
+"""Bar function - Version 3.0.0"""
+import time
+from pydantic import BaseModel
+
+
+class Output(BaseModel):
+    result: str
+    version: str
+    timestamp: float
+
+
+def handler() -> Output:
+    """Returns timestamp with no input required."""
+    ts = time.time()
+    return Output(result=f"tick: {ts}", version="3.0.0", timestamp=ts)
+EOF
+
+git add function.py
+git commit -m "v3.0.0: no params, returns timestamp"
+git tag 3.0.0
 
 # Push to bare repo
 git push origin main --tags
@@ -72,8 +119,9 @@ echo ""
 echo "Setup complete!"
 echo ""
 echo "Function repo created: $REPOS_DIR/bar"
-echo "  - Version 1.0.0: returns 'bar'"
-echo "  - Version 2.0.0: returns 'bat'"
+echo "  - Version 1.0.0: Input{name: str} -> Output{result, version}"
+echo "  - Version 2.0.0: Input{name: str, count: int} -> Output{result, version}"
+echo "  - Version 3.0.0: (no input) -> Output{result, version, timestamp}"
 echo ""
 echo "To start the example server:"
 echo "  cd example"
@@ -82,5 +130,7 @@ echo "  pip install fastapi uvicorn"
 echo "  uvicorn app.main:app --reload"
 echo ""
 echo "Then test with:"
-echo "  curl -X POST 'http://localhost:8000/api/foo?version=1.0.0'"
-echo "  curl -X POST 'http://localhost:8000/api/foo?version=2.0.0'"
+echo "  curl 'http://localhost:8000/api/foo?version=1.0.0&name=test'"
+echo "  curl 'http://localhost:8000/api/foo?version=2.0.0&name=test&count=3'"
+echo "  curl 'http://localhost:8000/api/foo?version=3.0.0'"
+echo "  curl 'http://localhost:8000/api/foo?version=1.0.0&name=test&delay=2'  # 2 second delay"
