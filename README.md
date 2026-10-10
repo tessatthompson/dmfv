@@ -1,4 +1,5 @@
 # DMFV - Dynamically Managed Function Versions
+This repo was created as a thought experiment and is not intended to be used in a real world application 
 
 Run versioned Python functions in isolated subprocesses using git worktrees. Each version runs in complete isolation with automatic Pydantic validation.
 
